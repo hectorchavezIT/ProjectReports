@@ -36,6 +36,28 @@ function Style-TotalRow {
     $Range.Style.Font.Bold = $true
 }
 
+function Test-HasNonZeroData {
+    param($DataObj)
+    
+    # Define the cost type properties to check
+    $costProperties = @('Hours', 'HoursCost', 'MaterialCost', 'SubcontractCost', 'EquipmentCost', 'OtherCost')
+    
+    foreach ($prop in $costProperties) {
+        $costObj = $DataObj.$prop
+        if ($costObj) {
+            $actual = [double]($costObj.Actual ?? 0)
+            $budget = [double]($costObj.Budget ?? 0)
+            
+            # If either actual or budget is non-zero, this has data
+            if ($actual -ne 0 -or $budget -ne 0) {
+                return $true
+            }
+        }
+    }
+    
+    return $false
+}
+
 # Define cost-family metadata once so headers and rows stay in sync
 $costFamilies = @(
     @{ Key = 'HoursCost';       Title = 'Labor %'        },
@@ -458,9 +480,11 @@ function New-AllCostDataRow {
         if ($CenterAlign) { $Worksheet.Cells.Item($Row, 2).Style.HorizontalAlignment = [OfficeOpenXml.Style.ExcelHorizontalAlignment]::Center }
     }
     
-    # Apply background to all cells if specified
+    # Apply background to all cells if specified, excluding spacer columns
     if ($BgColor) {
-        1..32 | ForEach-Object {
+        # Spacer columns: 7 (after Hours), 12 (after Labor), 17 (after Material), 22 (after Subcontract), 27 (after Equipment)
+        $spacerColumns = @(7, 12, 17, 22, 27)
+        1..31 | Where-Object { $_ -notin $spacerColumns } | ForEach-Object {
             $Worksheet.Cells.Item($Row, $_).Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
             $Worksheet.Cells.Item($Row, $_).Style.Fill.BackgroundColor.SetColor($BgColor)
         }
@@ -468,12 +492,12 @@ function New-AllCostDataRow {
     
     # Define all cost types with their column positions
     $costTypes = @(
-        @{ Name = "Hours"; StartCol = 4; Type = "Hours" },
-        @{ Name = "HoursCost"; StartCol = 9; Type = "Currency" },
-        @{ Name = "MaterialCost"; StartCol = 14; Type = "Currency" },
-        @{ Name = "SubcontractCost"; StartCol = 19; Type = "Currency" },
-        @{ Name = "EquipmentCost"; StartCol = 24; Type = "Currency" },
-        @{ Name = "OtherCost"; StartCol = 29; Type = "Currency" }
+        @{ Name = "Hours"; StartCol = 3; Type = "Hours" },
+        @{ Name = "HoursCost"; StartCol = 8; Type = "Currency" },
+        @{ Name = "MaterialCost"; StartCol = 13; Type = "Currency" },
+        @{ Name = "SubcontractCost"; StartCol = 18; Type = "Currency" },
+        @{ Name = "EquipmentCost"; StartCol = 23; Type = "Currency" },
+        @{ Name = "OtherCost"; StartCol = 28; Type = "Currency" }
     )
     
     foreach ($costType in $costTypes) {
@@ -580,12 +604,12 @@ function New-ReportSheet {
     $currentRow += 2
     
     # Add Grand Total row for all cost types in the frozen header section
-    New-AllCostDataRow $Worksheet $currentRow $JobData "Grand Total" "" 4 $true $grey -CenterAlign
+    New-AllCostDataRow $Worksheet $currentRow $JobData "Grand Total" "" 3 $true $grey -CenterAlign
     $currentRow++  # Remove extra space after grand total (was += 2)
     
     # Main table headers - rearranged with % first in each group for better collapsing
     $mainHeaders = @(
-        "", "Row Labels", "",
+        "", "Row Labels",
         "Hours %", "Hours", "Hours Budget", "Hours Remaining", "",
         "Labor %", "Labor Cost", "Labor Budget", "Labor Remaining", "",
         "Material %", "Material Cost", "Material Budget", "Material Remaining", "",
@@ -603,12 +627,12 @@ function New-ReportSheet {
     try {
         # Define column groups: [start_col, end_col] for each cost section's detail columns
         $columnGroups = @(
-            @(5, 8),   # Hours: Hours, Hours Budget, Hours Remaining, Gap
-            @(10, 13), # Labor: Labor Cost, Labor Budget, Labor Remaining, Gap  
-            @(15, 18), # Material: Material Cost, Material Budget, Material Remaining, Gap
-            @(20, 23), # Subcontract: Subcontract Cost, Subcontract Budget, Subcontract Remaining, Gap
-            @(25, 28), # Equipment: Equipment Cost, Equipment Budget, Equipment Remaining, Gap
-            @(30, 32)  # Other: Other Cost, Other Budget, Other Remaining (no gap)
+            @(4, 7),   # Hours: Hours, Hours Budget, Hours Remaining, Gap
+            @(9, 12),  # Labor: Labor Cost, Labor Budget, Labor Remaining, Gap  
+            @(14, 17), # Material: Material Cost, Material Budget, Material Remaining, Gap
+            @(19, 22), # Subcontract: Subcontract Cost, Subcontract Budget, Subcontract Remaining, Gap
+            @(24, 27), # Equipment: Equipment Cost, Equipment Budget, Equipment Remaining, Gap
+            @(29, 31)  # Other: Other Cost, Other Budget, Other Remaining (no gap)
         )
         
         foreach ($group in $columnGroups) {
@@ -621,10 +645,10 @@ function New-ReportSheet {
         Write-Warning "Unable to create column groups on worksheet for job ${JobId}: $($_.Exception.Message)"
     }
     
-    # Freeze panes to include summary section - freeze first 3 columns (A, B, C)
+    # Freeze panes to include summary section - freeze first 2 columns (A, B)
     $freezeRow = $currentRow  # This will freeze everything above the detail data (summary section + headers)
     try {
-        $Worksheet.View.FreezePanes($freezeRow, 4)  # Freeze at row $freezeRow, column 4 (D) - this freezes columns A, B, C and all summary rows
+        $Worksheet.View.FreezePanes($freezeRow, 3)  # Freeze at row $freezeRow, column 3 (C) - this freezes columns A, B and all summary rows
     } catch {
         Write-Warning "Unable to freeze panes on worksheet for job ${JobId}: $($_.Exception.Message)"
     }
@@ -633,14 +657,14 @@ function New-ReportSheet {
     if ($JobData.Phases) {
         foreach ($phaseKey in $JobData.Phases.PSObject.Properties.Name) {
             # Skip phases 000 and 999
-            if ($phaseKey -eq "000" -or $phaseKey -eq "999" -or $phaseKey -eq "001" -or $phaseKey -eq "777") {
+            if ($phaseKey -eq "000") {
                 continue
             }
             
             $phase = $JobData.Phases.$phaseKey
             
             # Phase row with grey background - use new helper for all cost types
-            New-AllCostDataRow $Worksheet $currentRow $phase $phaseKey $phase.PhaseName 4 $true $grey
+            New-AllCostDataRow $Worksheet $currentRow $phase $phaseKey $phase.PhaseName 3 $true $grey
             $currentRow++
             $phaseStartRow = $currentRow
             
@@ -666,7 +690,7 @@ function New-ReportSheet {
     }
     
     # Auto-fit columns
-    1..32 | ForEach-Object { $Worksheet.Column($_).AutoFit() }
+    1..31 | ForEach-Object { $Worksheet.Column($_).AutoFit() }
     
     if ($ReturnData) {
         return @{
