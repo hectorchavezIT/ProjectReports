@@ -1,0 +1,14 @@
+{
+    "Houston Placement": {
+        "classes": [
+            "HCOM",
+            "HISD"
+        ],
+        "companies": [
+           1
+        ],
+        "SenderEmail": "HOUWeeklyReports@keystoneconcrete.com",
+        "ErrorRecipients": ["hector@stewarthg.com", "jeffr@stewarthg.com"],
+        "SummaryRecipients": [ "hector@stewarthg.com" ,"jeffr@stewarthg.com", "rodney@keystoneconcrete.com"]
+    } 
+}
