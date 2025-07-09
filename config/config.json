@@ -1,14 +1,15 @@
 {
-    "Houston Placement": {
+    "Georgetown": {
         "classes": [
-            "HCOM",
-            "HISD"
+            "ACOM",
+            "ACOL",
+            "ACOT"
         ],
         "companies": [
            1
         ],
-        "SenderEmail": "HOUWeeklyReports@keystoneconcrete.com",
+        "SenderEmail": "GTWeeklyReports@keystoneconcrete.com",
         "ErrorRecipients": ["hector@stewarthg.com", "jeffr@stewarthg.com"],
-        "SummaryRecipients": [ "hector@stewarthg.com" ,"jeffr@stewarthg.com", "rodney@keystoneconcrete.com"]
-    } 
+        "SummaryRecipients": [ "hector@stewarthg.com" , "kylec@keystoneconcrete.com", "jeffr@stewarthg.com"]
+    }
 }

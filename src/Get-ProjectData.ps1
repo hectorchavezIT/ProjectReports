@@ -1,9 +1,4 @@
-function Get-LastFriday {
-    $today = Get-Date
-    $dayOfWeek = $today.DayOfWeek.value__
-    $daysToGoBack = if ($dayOfWeek -eq 5) { 7 } else { ($dayOfWeek + 2) % 7 }
-    return (Get-Date).AddDays(-$daysToGoBack).Date
-}
+
 
 function New-BudgetActualObject {
     param($Budget, $Actual)
@@ -13,6 +8,28 @@ function New-BudgetActualObject {
         Remaining = [Math]::Round($Budget - $Actual, 2)
         PercentOfBudget = if ($Budget -gt 0) { [Math]::Round(($Actual / $Budget) * 100, 2) } else { 0 }
     }
+}
+
+function Test-JobHasData {
+    param($Job)
+    
+    # Check main cost categories for any non-zero budget or actual values
+    $costCategories = @('Hours', 'HoursCost', 'MaterialCost', 'SubcontractCost', 'EquipmentCost', 'OtherCost', 'AdministrativeCost', 'ProjectCost')
+    
+    foreach ($category in $costCategories) {
+        $obj = $Job.$category
+        if ($obj -and (($obj.Budget -gt 0) -or ($obj.Actual -gt 0))) {
+            return $true
+        }
+    }
+    
+    # Check contract amount
+    if ($Job.ContractAmount -gt 0) {
+        return $true
+    }
+    
+    # If we get here, the job has no meaningful data
+    return $false
 }
 
 function Export-JobDataToJson {
@@ -49,7 +66,7 @@ function Export-JobDataToJson {
     }
 
     # Setup
-    $CutoffDate = if ($CutoffDate -eq [DateTime]::MinValue) { Get-LastFriday } else { $CutoffDate }
+    $CutoffDate = if ($CutoffDate -eq [DateTime]::MinValue) { Get-Date } else { $CutoffDate }
     $dateFormatted = $CutoffDate.ToString("yyyyMMdd")
     $outputDir = Join-Path "reports" $Group $dateFormatted
     New-Item -Path $outputDir -ItemType Directory -Force | Out-Null
@@ -311,14 +328,39 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
             }
         }
 
-        # Export to JSON
-        $projectCostCount = ($jobData.Values | Where-Object { $_.ProjectCost.Budget -gt 0 -or $_.ProjectCost.Actual -gt 0 }).Count
-        Write-Host "Number of jobs with project cost data: $projectCostCount"
+        # Filter out jobs with no meaningful data
+        $originalCount = $jobData.Count
+        $filteredJobData = [ordered]@{}
+        $emptyJobs = @()
         
-        $jobData | ConvertTo-Json -Depth 15 | Out-File $OutputFile -Encoding utf8
+        foreach ($jobKey in $jobData.Keys) {
+            if (Test-JobHasData $jobData[$jobKey]) {
+                $filteredJobData[$jobKey] = $jobData[$jobKey]
+            } else {
+                $emptyJobs += $jobKey
+            }
+        }
+        
+        $filteredCount = $filteredJobData.Count
+        $removedCount = $originalCount - $filteredCount
+        
+        Write-Host "Total jobs found: $originalCount"
+        Write-Host "Jobs with data: $filteredCount"
+        Write-Host "Empty jobs filtered out: $removedCount"
+        
+        if ($emptyJobs.Count -gt 0) {
+            Write-Host "Filtered out jobs: $($emptyJobs -join ', ')"
+        }
+
+        # Export filtered data to JSON
+        if ($filteredJobData.Count -gt 0) {
+            $filteredJobData | ConvertTo-Json -Depth 15 | Out-File $OutputFile -Encoding utf8
         Write-Host "Data exported to $OutputFile"
+        } else {
+            Write-Warning "No jobs with meaningful data found. No file created."
+        }
         
-        return $jobData
+        return $filteredJobData
     }
     catch { Write-Error "Error: $_" }
     finally { if ($conn.State -eq 'Open') { $conn.Close() } }
