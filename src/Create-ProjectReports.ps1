@@ -1,5 +1,18 @@
 Add-Type -path "C:\Users\hectorc\OneDrive - Keystone Concrete\Documents\WindowsPowerShell\Modules\ImportExcel\7.8.9\EPPlus.dll"
 
+# Standardized color palette
+$Colors = @{
+    Red = [System.Drawing.Color]::Red
+    LightGreen = [System.Drawing.Color]::FromArgb(255, 198, 239, 206)
+    LightBlue = [System.Drawing.Color]::LightBlue
+    LightRed = [System.Drawing.Color]::FromArgb(255, 255, 199, 206)
+    White = [System.Drawing.Color]::White
+    Black = [System.Drawing.Color]::Black
+    Blue = [System.Drawing.Color]::Blue
+    Grey = [System.Drawing.Color]::FromArgb(255, 217, 217, 217)
+    LightGrey = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
+}
+
 # Consolidated cell formatting function
 function Set-CellData {
     param(
@@ -18,7 +31,7 @@ function Set-CellData {
         if ($Value -is [double] -or $Value -is [float] -or $Value -is [decimal]) {
             $isValidValue = -not [double]::IsNaN($Value) -and -not [double]::IsInfinity($Value)
         }
-        if ($isValidValue) { 
+        if ($isValidValue) {
             $Cell.Value = $Value 
         }
     } elseif ($Type -in @("Currency", "Hours", "Percent")) {
@@ -55,15 +68,15 @@ function Set-PercentCell {
     # Conditional formatting
     $Cell.Style.Fill.PatternType = [OfficeOpenXml.Style.ExcelFillStyle]::Solid
     $bgColor = if ($percent -eq 0) {
-        if ($Actual -gt 0 -and $Budget -eq 0) { [System.Drawing.Color]::Red }
-        elseif ($Budget -gt 0 -and $Actual -eq 0) { [System.Drawing.Color]::FromArgb(255, 198, 239, 206) }
-        else { [System.Drawing.Color]::LightGray }
-    } elseif ($percent -gt 100) { [System.Drawing.Color]::FromArgb(255, 255, 199, 206) }
-    else { [System.Drawing.Color]::FromArgb(255, 198, 239, 206) }
+        if ($Actual -gt 0 -and $Budget -eq 0) { $Colors.Red }
+        elseif ($Budget -gt 0 -and $Actual -eq 0) { $Colors.LightGreen }
+        else { $Colors.LightBlue }
+    } elseif ($percent -gt 100) { $Colors.LightRed }
+    else { $Colors.LightGreen }
     
     $Cell.Style.Fill.BackgroundColor.SetColor($bgColor)
-    if ($bgColor -eq [System.Drawing.Color]::Red) {
-        $Cell.Style.Font.Color.SetColor([System.Drawing.Color]::White)
+    if ($bgColor -eq $Colors.Red) {
+        $Cell.Style.Font.Color.SetColor($Colors.White)
     }
 }
 
@@ -79,13 +92,13 @@ $costFamilies = @(
     @{ Key = 'EquipmentCost'; Title = 'Equipment %' },
     @{ Key = 'SubcontractCost'; Title = 'Subcontract %' },
     @{ Key = 'OtherCost'; Title = 'Other %' },
-    @{ Key = 'AdministrativeCost'; Title = 'Administrative %' }
+    @{ Key = 'AdministrativeCost'; Title = 'Admin %' }
 )
 
 # Consolidated function to add cost data row
 function Add-CostDataRow {
     param($Sheet, [int]$Row, $JobData, [int]$StartCol, [bool]$Bold = $false, $BgColor = $null)
-    
+
     $col = $StartCol
     foreach ($fam in $costFamilies) {
         $obj = $JobData.($fam.Key) ?? @{ Actual = 0; Budget = 0; Remaining = 0 }
@@ -171,12 +184,12 @@ function New-PMSummarySheet {
         @($_.Title, ($_.Title -replace ' %', ' Cost'), ($_.Title -replace ' %', ' Budget'), ($_.Title -replace ' %', ' Remaining'), '')
     }
     $headers = @('Job Number','Job Name') + $costHeaders + @('Project %', 'Contract Amount', 'Project Budget', 'Project Cost', 'Est. Profit')
-    
+
     # Merge title rows and add headers
     $summarySheet.Cells[1,1,1,$headers.Count].Merge = $true
     $summarySheet.Cells[2,1,2,$headers.Count].Merge = $true
     for ($i = 0; $i -lt $headers.Count; $i++) {
-        Set-CellData $summarySheet.Cells.Item(3, $i+1) $headers[$i] -Bold $true -BgColor ([System.Drawing.Color]::Black) -FontColor ([System.Drawing.Color]::White)
+        Set-CellData $summarySheet.Cells.Item(3, $i+1) $headers[$i] -Bold $true -BgColor $Colors.Black -FontColor $Colors.White
     }
     
     # Calculate project section columns first
@@ -185,12 +198,13 @@ function New-PMSummarySheet {
     [int]$profitCol = $projectStartCol + 4                # Column 32 - Est. Profit
     
     # Create column groups for cost sections (include gap columns so they collapse together)
-    $summaryColumnGroups = @(
+        $summaryColumnGroups = @(
         @(4,7),   # Labor: Cost, Budget, Remaining + Gap
         @(9,12),  # Material: Cost, Budget, Remaining + Gap  
         @(14,17), # Equipment: Cost, Budget, Remaining + Gap
         @(19,22), # Subcontract: Cost, Budget, Remaining + Gap
-        @(24,27)  # Other: Cost, Budget, Remaining + Gap
+        @(24,27), # Other: Cost, Budget, Remaining + Gap
+        @(29,32)  # Admin: Cost, Budget, Remaining + Gap
     )
     Set-ColumnGroups $summarySheet $summaryColumnGroups $true  # Cost sections collapsed
     
@@ -202,17 +216,17 @@ function New-PMSummarySheet {
             for ($col = $contractCol; $col -le $profitCol; $col++) {
                 $summarySheet.Column($col).OutlineLevel = 1
                 # Expanded by default (don't set Collapsed = true)
-            }
-        } catch {
+        }
+    } catch {
             Write-Warning "Failed to create project section grouping: $($_.Exception.Message)"
         }
     }
     
     # Initialize totals
     $pmTotals = @{ ContractAmount = 0; ProjectBudget = 0; ProjectCost = 0; EstProfit = 0 }
-         $costTotals = @{}
+    $costTotals = @{}
      $costFamilies | ForEach-Object { $costTotals[$_.Key] = @{ Actual = 0; Budget = 0; Remaining = 0 } }
-     
+    
      [int]$currentRow = 4
     
     # Process jobs
@@ -225,7 +239,7 @@ function New-PMSummarySheet {
         $worksheetName = if ($jobId.Length -gt 31) { $jobId.Substring(0, 31) } else { $jobId }
         $summarySheet.Cells.Item($currentRow, 1).Hyperlink = New-Object OfficeOpenXml.ExcelHyperLink("'$worksheetName'!A1", $jobId)
         $summarySheet.Cells.Item($currentRow, 1).Style.Font.UnderLine = $true
-        $summarySheet.Cells.Item($currentRow, 1).Style.Font.Color.SetColor([System.Drawing.Color]::Blue)
+        $summarySheet.Cells.Item($currentRow, 1).Style.Font.Color.SetColor($Colors.Blue)
         Set-CellData $summarySheet.Cells.Item($currentRow, 2) $job.JobName
         
         # Add cost data
@@ -272,19 +286,18 @@ function New-PMSummarySheet {
     }
     
     # Totals row
-    $grey = [System.Drawing.Color]::FromArgb(255, 217, 217, 217)
-    Set-CellData $summarySheet.Cells.Item($currentRow, 1) "TOTAL" -Bold $true -BgColor $grey
-    Set-CellData $summarySheet.Cells.Item($currentRow, 2) "" -Bold $true -BgColor $grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, 1) "TOTAL" -Bold $true -BgColor $Colors.Grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, 2) "" -Bold $true -BgColor $Colors.Grey
     
     # Cost family totals
-    Add-CostDataRow $summarySheet $currentRow $costTotals 3 $true $grey
+    Add-CostDataRow $summarySheet $currentRow $costTotals 3 $true $Colors.Grey
     
     # Project totals
     Set-PercentCell $summarySheet.Cells.Item($currentRow, $projPercentCol) $pmTotals.ProjectCost $pmTotals.ProjectBudget ($pmTotals.ProjectBudget - $pmTotals.ProjectCost) $true
-    Set-CellData $summarySheet.Cells.Item($currentRow, $contractCol) $pmTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $grey
-    Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $pmTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $grey
-    Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $pmTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $grey
-    Set-CellData $summarySheet.Cells.Item($currentRow, $profitCol) $pmTotals.EstProfit -Type "Currency" -Bold $true -BgColor $grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, $contractCol) $pmTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $Colors.Grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $pmTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $Colors.Grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $pmTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $Colors.Grey
+    Set-CellData $summarySheet.Cells.Item($currentRow, $profitCol) $pmTotals.EstProfit -Type "Currency" -Bold $true -BgColor $Colors.Grey
     
     # Freeze panes and autofit
     $summarySheet.View.FreezePanes(4, 3)
@@ -318,7 +331,8 @@ function Add-AllCostDataRow {
         @{ Name = "MaterialCost"; StartCol = 13; Type = "Currency" },
         @{ Name = "SubcontractCost"; StartCol = 18; Type = "Currency" },
         @{ Name = "EquipmentCost"; StartCol = 23; Type = "Currency" },
-        @{ Name = "OtherCost"; StartCol = 28; Type = "Currency" }
+        @{ Name = "OtherCost"; StartCol = 28; Type = "Currency" },
+        @{ Name = "AdministrativeCost"; StartCol = 33; Type = "Currency" }
     )
     
     foreach ($costType in $costTypes) {
@@ -348,7 +362,6 @@ function Add-AllCostDataRow {
 function New-ReportSheet {
     param($JobId, $JobData, $Worksheet, [switch]$ReturnData, [switch]$IncludeSummaryLink)
     
-    $grey = [System.Drawing.Color]::FromArgb(255, 217, 217, 217)
     [int]$currentRow = if ($IncludeSummaryLink) { 5 } else { 4 }
     
     # Return to Summary link
@@ -356,7 +369,7 @@ function New-ReportSheet {
         $Worksheet.Cells["A1"].Value = "Return to Summary"
         $Worksheet.Cells["A1"].Hyperlink = New-Object OfficeOpenXml.ExcelHyperLink("'Summary'!A1", "Return to Summary")
         $Worksheet.Cells["A1"].Style.Font.UnderLine = $true
-        $Worksheet.Cells["A1"].Style.Font.Color.SetColor([System.Drawing.Color]::Blue)
+        $Worksheet.Cells["A1"].Style.Font.Color.SetColor($Colors.Blue)
     }
     
     # Calculate summary values
@@ -392,7 +405,7 @@ function New-ReportSheet {
     Set-PercentCell $Worksheet.Cells.Item($currentRow, 2) (Get-SafeDouble $JobData.ProjectCost.Actual) (Get-SafeDouble $JobData.ProjectCost.Budget) (Get-SafeDouble $JobData.ProjectCost.Remaining) $true
     $Worksheet.Cells.Item($currentRow, 2).Style.HorizontalAlignment = [OfficeOpenXml.Style.ExcelHorizontalAlignment]::Center
     $currentRow++
-    
+
     $projDetailStartRow = $currentRow
     
     # Detail rows (will be collapsed)
@@ -419,7 +432,7 @@ function New-ReportSheet {
     Set-PercentCell $Worksheet.Cells.Item($currentRow, 2) $hourlyActualRate $hourlyBudgetRate ($hourlyBudgetRate - $hourlyActualRate) $true
     $Worksheet.Cells.Item($currentRow, 2).Style.HorizontalAlignment = [OfficeOpenXml.Style.ExcelHorizontalAlignment]::Center
     $currentRow++
-    
+
     $hourlyDetailStartRow = $currentRow
     
     # Hourly detail rows (will be collapsed)
@@ -438,7 +451,7 @@ function New-ReportSheet {
     $currentRow += 1
     
     # Grand Total row
-    Add-AllCostDataRow $Worksheet $currentRow $JobData "" "" $true $grey $true
+    Add-AllCostDataRow $Worksheet $currentRow $JobData "" "" $true $Colors.Grey $true
     # Ensure column B (next to Grand Total) also has gray background
     # Set-CellData $Worksheet.Cells.Item($currentRow, 2) "" -Bold $true -BgColor $grey
     $currentRow++
@@ -451,22 +464,24 @@ function New-ReportSheet {
         "Material %", "Material Cost", "Material Budget", "Material Remaining", "",
         "Subcontract %", "Subcontract Cost", "Subcontract Budget", "Subcontract Remaining", "",
         "Equipment %", "Equipment Cost", "Equipment Budget", "Equipment Remaining", "",
-        "Other %", "Other Cost", "Other Budget", "Other Remaining"
+        "Other %", "Other Cost", "Other Budget", "Other Remaining", "",
+        "Admin %", "Admin Cost", "Admin Budget", "Admin Remaining"
     )
     
     for ($i = 0; $i -lt $mainHeaders.Count; $i++) {
-        Set-CellData $Worksheet.Cells.Item($currentRow, $i+1) $mainHeaders[$i] -Bold $true -BgColor ([System.Drawing.Color]::Black) -FontColor ([System.Drawing.Color]::White)
+        Set-CellData $Worksheet.Cells.Item($currentRow, $i+1) $mainHeaders[$i] -Bold $true -BgColor $Colors.Black -FontColor $Colors.White
     }
     $currentRow++
     
     # Create collapsible column groups (include gap columns so they collapse together)
-    $columnGroups = @(
+        $columnGroups = @(
         @(4,7),   # Hours: Hours, Hours Budget, Hours Remaining + Gap
         @(9,12),  # Labor: Labor Cost, Labor Budget, Labor Remaining + Gap
         @(14,17), # Material: Material Cost, Material Budget, Material Remaining + Gap
         @(19,22), # Subcontract: Subcontract Cost, Subcontract Budget, Subcontract Remaining + Gap
         @(24,27), # Equipment: Equipment Cost, Equipment Budget, Equipment Remaining + Gap
-        @(29,31)  # Other: Other Cost, Other Budget, Other Remaining (no gap after last)
+        @(29,32), # Other: Other Cost, Other Budget, Other Remaining + Gap
+        @(34,36)  # Admin: Admin Cost, Admin Budget, Admin Remaining (no gap after last)
     )
     
     # Filter out any groups that exceed the actual column count
@@ -483,7 +498,7 @@ function New-ReportSheet {
             if ($phaseKey -eq "000") { continue }  # Skip phase 000
             
             $phase = $JobData.Phases.$phaseKey
-            Add-AllCostDataRow $Worksheet $currentRow $phase $phaseKey $phase.PhaseName $true $grey
+            Add-AllCostDataRow $Worksheet $currentRow $phase $phaseKey $phase.PhaseName $true $Colors.Grey
             $currentRow++
             $phaseStartRow = $currentRow
             
@@ -578,7 +593,7 @@ function New-GrandSummaryFile {
         $summarySheet.Cells[1,1,1,$headers.Count].Merge = $true
         $summarySheet.Cells[2,1,2,$headers.Count].Merge = $true
         for ($i = 0; $i -lt $headers.Count; $i++) {
-            Set-CellData $summarySheet.Cells.Item(3, $i+1) $headers[$i] -Bold $true -BgColor ([System.Drawing.Color]::Black) -FontColor ([System.Drawing.Color]::White)
+            Set-CellData $summarySheet.Cells.Item(3, $i+1) $headers[$i] -Bold $true -BgColor $Colors.Black -FontColor $Colors.White
         }
         
         # Calculate project section columns
@@ -592,7 +607,8 @@ function New-GrandSummaryFile {
             @(9,12),  # Material: Cost, Budget, Remaining + Gap  
             @(14,17), # Equipment: Cost, Budget, Remaining + Gap
             @(19,22), # Subcontract: Cost, Budget, Remaining + Gap
-            @(24,27)  # Other: Cost, Budget, Remaining + Gap
+            @(24,27), # Other: Cost, Budget, Remaining + Gap
+            @(29,32)  # Admin: Cost, Budget, Remaining + Gap
         )
         Set-ColumnGroups $summarySheet $summaryColumnGroups $true
         
@@ -649,12 +665,11 @@ function New-GrandSummaryFile {
             }
             
             # PM Total row (displayed first)
-            $lightGrey = [System.Drawing.Color]::FromArgb(255, 230, 230, 230)
-            Set-CellData $summarySheet.Cells.Item($currentRow, 1) "TOTAL" -Bold $true -BgColor $lightGrey
-            Set-CellData $summarySheet.Cells.Item($currentRow, 2) $pmName -Bold $true -BgColor $lightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, 1) "TOTAL" -Bold $true -BgColor $Colors.LightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, 2) $pmName -Bold $true -BgColor $Colors.LightGrey
             
             # PM cost totals
-            Add-CostDataRow $summarySheet $currentRow $pmCostTotals 3 $true $lightGrey
+            Add-CostDataRow $summarySheet $currentRow $pmCostTotals 3 $true $Colors.LightGrey
             
             # PM project totals
             [int]$projPercentCol = $projectStartCol
@@ -664,17 +679,17 @@ function New-GrandSummaryFile {
             [int]$profitColPos = $projectStartCol + 4
             
             Set-PercentCell $summarySheet.Cells.Item($currentRow, $projPercentCol) $pmTotals.ProjectCost $pmTotals.ProjectBudget ($pmTotals.ProjectBudget - $pmTotals.ProjectCost) $true
-            Set-CellData $summarySheet.Cells.Item($currentRow, $contractColPos) $pmTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $lightGrey
-            Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $pmTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $lightGrey
-            Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $pmTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $lightGrey
-            Set-CellData $summarySheet.Cells.Item($currentRow, $profitColPos) $pmTotals.EstProfit -Type "Currency" -Bold $true -BgColor $lightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, $contractColPos) $pmTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $Colors.LightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $pmTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $Colors.LightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $pmTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $Colors.LightGrey
+            Set-CellData $summarySheet.Cells.Item($currentRow, $profitColPos) $pmTotals.EstProfit -Type "Currency" -Bold $true -BgColor $Colors.LightGrey
             $currentRow++
             
             # Track job rows for grouping (jobs come after TOTAL)
             $jobRowStart = $currentRow
             
             # Second pass: Display job details (collapsible)
-            foreach ($jobId in $pmJobs) {
+    foreach ($jobId in $pmJobs) {
                 $job = $JobData."$jobId"
                 if (-not $job) { continue }
                 
@@ -683,7 +698,7 @@ function New-GrandSummaryFile {
                 $worksheetName = Get-UniqueWorksheetName $package $jobId
                 $summarySheet.Cells.Item($currentRow, 1).Hyperlink = New-Object OfficeOpenXml.ExcelHyperLink("'$worksheetName'!A1", $jobId)
                 $summarySheet.Cells.Item($currentRow, 1).Style.Font.UnderLine = $true
-                $summarySheet.Cells.Item($currentRow, 1).Style.Font.Color.SetColor([System.Drawing.Color]::Blue)
+                $summarySheet.Cells.Item($currentRow, 1).Style.Font.Color.SetColor($Colors.Blue)
                 Set-CellData $summarySheet.Cells.Item($currentRow, 2) $job.JobName
                 
                 # Add cost data for this job
@@ -726,19 +741,18 @@ function New-GrandSummaryFile {
         }
         
         # Grand Totals row
-        $grey = [System.Drawing.Color]::FromArgb(255, 217, 217, 217)
-        Set-CellData $summarySheet.Cells.Item($currentRow, 1) "GRAND TOTAL" -Bold $true -BgColor $grey
-        Set-CellData $summarySheet.Cells.Item($currentRow, 2) "" -Bold $true -BgColor $grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, 1) "GRAND TOTAL" -Bold $true -BgColor $Colors.Grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, 2) "" -Bold $true -BgColor $Colors.Grey
         
         # Cost family grand totals
-        Add-CostDataRow $summarySheet $currentRow $grandCostTotals 3 $true $grey
+        Add-CostDataRow $summarySheet $currentRow $grandCostTotals 3 $true $Colors.Grey
         
         # Project grand totals
         Set-PercentCell $summarySheet.Cells.Item($currentRow, $projPercentCol) $grandTotals.ProjectCost $grandTotals.ProjectBudget ($grandTotals.ProjectBudget - $grandTotals.ProjectCost) $true
-        Set-CellData $summarySheet.Cells.Item($currentRow, $contractColPos) $grandTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $grey
-        Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $grandTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $grey
-        Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $grandTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $grey
-        Set-CellData $summarySheet.Cells.Item($currentRow, $profitColPos) $grandTotals.EstProfit -Type "Currency" -Bold $true -BgColor $grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, $contractColPos) $grandTotals.ContractAmount -Type "Currency" -Bold $true -BgColor $Colors.Grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, $projBudgetCol) $grandTotals.ProjectBudget -Type "Currency" -Bold $true -BgColor $Colors.Grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, $projCostCol) $grandTotals.ProjectCost -Type "Currency" -Bold $true -BgColor $Colors.Grey
+        Set-CellData $summarySheet.Cells.Item($currentRow, $profitColPos) $grandTotals.EstProfit -Type "Currency" -Bold $true -BgColor $Colors.Grey
         
         # Freeze panes and autofit
         $summarySheet.View.FreezePanes(4, 3)
@@ -849,7 +863,7 @@ function Create-ProjectReports {
     }
     
     # Create Grand Summary file
-    $grandSummaryFile = Join-Path $OutputBasePath "GrandSummary_${timestamp}.xlsx"
+    $grandSummaryFile = Join-Path $OutputBasePath "${group}_GrandSummary_${timestamp}.xlsx"
     New-GrandSummaryFile -JobData $jobData -PMGroups $pmGroups -Group $group -OutputPath $grandSummaryFile
     Write-Host "  Created: Grand Summary file"
 
@@ -867,6 +881,53 @@ function Create-AllProjectReports {
     }
 }
 
+# Consolidated entry-point: generates JSON data (via Export-JobDataToJson) and then builds Excel reports
+function Generate-ProjectReports {
+    param(
+        [string]$Group = "",
+        [DateTime]$CutoffDate = [DateTime]::MinValue
+    )
 
-# Auto-run when executed directly (not dot-sourced)
-    Create-AllProjectReports -ReportsPath "C:\WorkV4\ProjectReports\reports"
+    # Default cutoff to today if not provided
+    if ($CutoffDate -eq [DateTime]::MinValue) { $CutoffDate = Get-Date }
+    $dateFormatted = $CutoffDate.ToString('yyyyMMdd')
+
+    Write-Host "========= Generate-ProjectReports ========="
+    Write-Host "Group       : $Group"
+    Write-Host "Cutoff Date : $($CutoffDate.ToString('yyyy-MM-dd'))"
+
+    # Load Export-JobDataToJson from Get-ProjectData.ps1 (same folder)
+    . (Join-Path $PSScriptRoot 'Get-ProjectData.ps1')
+
+    # Helper ‑ process a single group
+    function Invoke-ReportPipeline($grp) {
+        Write-Host "\n--- Processing group '$grp' ---"
+        $null = Export-JobDataToJson -Group $grp -CutoffDate $CutoffDate
+
+        # Expected JSON path created by Export-JobDataToJson
+        $reportsDir = Join-Path (Join-Path 'reports' $grp) $dateFormatted
+        $jsonPath   = Join-Path $reportsDir "${grp}_JobData_${dateFormatted}.json"
+
+        if (-not (Test-Path $jsonPath)) {
+            Write-Warning "JSON file not found: $jsonPath ‑ skipping report generation."
+            return
+        }
+
+        Create-ProjectReports -JsonPath $jsonPath
+    }
+
+    if ([string]::IsNullOrEmpty($Group)) {
+        # No group specified  ->  iterate all groups in config
+        $configPath = Join-Path (Join-Path $PSScriptRoot '..') 'config' 'config.json'
+        if (-not (Test-Path $configPath)) { Write-Error "Configuration file not found: $configPath"; return }
+        $cfg = Get-Content $configPath | ConvertFrom-Json
+        $cfg.PSObject.Properties.Name | ForEach-Object { Invoke-ReportPipeline $_ }
+    }
+    else {
+        Invoke-ReportPipeline $Group
+    }
+
+    Write-Host "\nGenerate-ProjectReports completed."
+}
+
+ 

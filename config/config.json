@@ -1,5 +1,5 @@
 {
-    "Georgetown": {
+    "Georgetown Placement": {
         "classes": [
             "ACOM",
             "ACOL",
@@ -11,5 +11,28 @@
         "SenderEmail": "GTWeeklyReports@keystoneconcrete.com",
         "ErrorRecipients": ["hector@stewarthg.com", "jeffr@stewarthg.com"],
         "SummaryRecipients": [ "hector@stewarthg.com" , "kylec@keystoneconcrete.com", "jeffr@stewarthg.com"]
+    },
+    "Houston Placement": {
+        "classes": [
+            "HCOM",
+            "HISD"
+        ],
+        "companies": [
+           1
+        ],
+        "SenderEmail": "HOUWeeklyReports@keystoneconcrete.com",
+        "ErrorRecipients": ["hector@stewarthg.com", "jeffr@stewarthg.com"],
+        "SummaryRecipients": [ "hector@stewarthg.com" ,"jeffr@stewarthg.com", "rodney@keystoneconcrete.com"]
+    },
+    "Houston Structural": {
+        "classes": [
+            "HCOM"
+        ],
+        "companies": [
+           5
+        ],
+        "SenderEmail": "HOUDailyReports@keystoneconcrete.com",
+        "ErrorRecipients": ["hector@stewarthg.com"],
+        "SummaryRecipients": [ "hector@stewarthg.com"]
     }
 }

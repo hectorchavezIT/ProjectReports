@@ -32,6 +32,52 @@ function Test-JobHasData {
     return $false
 }
 
+function Test-CategoryHasData {
+    param($Category)
+    
+    # Check only hours and labor cost for any non-zero budget or actual values
+    $costCategories = @('Hours', 'HoursCost')
+    
+    foreach ($costName in $costCategories) {
+        $obj = $Category.$costName
+        if ($obj -and (($obj.Budget -gt 0) -or ($obj.Actual -gt 0))) {
+            return $true
+        }
+    }
+    
+    return $false
+}
+
+function Test-PhaseHasData {
+    param($Phase)
+    
+    # Check only hours and labor cost for any non-zero budget or actual values
+    $costCategories = @('Hours', 'HoursCost')
+    
+    foreach ($costName in $costCategories) {
+        $obj = $Phase.$costName
+        if ($obj -and (($obj.Budget -gt 0) -or ($obj.Actual -gt 0))) {
+            return $true
+        }
+    }
+    
+    return $false
+}
+
+# Helper function to safely convert database values to double, handling DBNull
+function ConvertTo-SafeDouble {
+    param([object]$Value)
+    if ($Value -is [DBNull] -or $Value -eq $null) {
+        return 0.0
+    }
+    try {
+        return [double]$Value
+    }
+    catch {
+        return 0.0
+    }
+}
+
 function Export-JobDataToJson {
     param (
         [string]$Group = "",
@@ -39,7 +85,7 @@ function Export-JobDataToJson {
     )
 
     # Load and validate config
-    $ConfigPath = Join-Path $PSScriptRoot ".." "config" "config.json"
+    $ConfigPath = Join-Path (Join-Path $PSScriptRoot "..") "config" | Join-Path -ChildPath "config.json"
     if (-not (Test-Path $ConfigPath)) { Write-Error "Configuration file not found at $ConfigPath"; return }
     $Config = Get-Content $ConfigPath | ConvertFrom-Json
 
@@ -77,6 +123,9 @@ function Export-JobDataToJson {
     $companyFilter = if ($groupConfig.companies -and $groupConfig.companies.Count -gt 0) {
         " AND j.company IN ($($groupConfig.companies -join ','))"
     } else { "" }
+    $contractCompanyFilter = if ($groupConfig.companies -and $groupConfig.companies.Count -gt 0) {
+        " AND jc.Company IN ($($groupConfig.companies -join ','))"
+    } else { "" }
 
     Write-Host "Using cutoff date: $dateFormatted for $Group"
     if ($companyFilter) { Write-Host "Filtering by companies: $($groupConfig.companies -join ', ')" }
@@ -85,19 +134,21 @@ function Export-JobDataToJson {
     $conn = New-Object System.Data.SqlClient.SqlConnection("Server=housql01;Database=DataExtract;Integrated Security=SSPI")
     try {
         $conn.Open()
+        
         $query = @"
 ;WITH FilteredDetail AS (
     SELECT jobnum, phasenum, catnum, type, hours, cost
     FROM   jcdetail
     WHERE  date <= '$dateFormatted'
-      AND  type IN (1,33,34,35,36,5,6,7,8,9,37,38,39,40,41)
+      AND  type IN (1,2,3,4,33,34,35,36,5,6,7,8,9,37,38,39,40,41)
+      AND  company IN ($($groupConfig.companies -join ','))
 ),
 DetailAgg AS (
     SELECT jobnum, phasenum, catnum,
            SUM(CASE WHEN type IN (33,34,35,36) THEN hours ELSE 0 END) AS BudgetHours,
-           SUM(CASE WHEN type = 1                  THEN hours ELSE 0 END) AS ActualHours,
+           SUM(CASE WHEN type IN (1,2,3,4)     THEN hours ELSE 0 END) AS ActualHours,
            SUM(CASE WHEN type IN (33,34,35,36) THEN cost  ELSE 0 END) AS LaborBudget,
-           SUM(CASE WHEN type = 1                  THEN cost  ELSE 0 END) AS LaborCost,
+           SUM(CASE WHEN type IN (1,2,3,4)     THEN cost  ELSE 0 END) AS LaborCost,
            SUM(CASE WHEN type = 37                THEN cost  ELSE 0 END) AS MaterialBudget,
            SUM(CASE WHEN type = 5                 THEN cost  ELSE 0 END) AS MaterialCost
           ,SUM(CASE WHEN type = 38                THEN cost  ELSE 0 END) AS SubcontractBudget
@@ -127,6 +178,9 @@ JobTotals AS (
           ,SUM(OtherCost)   AS TotalOtherCost
           ,SUM(AdministrativeBudget) AS TotalAdministrativeBudget
           ,SUM(AdministrativeCost)   AS TotalAdministrativeCost
+          -- Calculate total project budget and actual from detail components
+          ,(SUM(LaborBudget) + SUM(MaterialBudget) + SUM(SubcontractBudget) + SUM(EquipmentBudget) + SUM(OtherBudget) + SUM(AdministrativeBudget)) AS TotalProjectBudget
+          ,(SUM(LaborCost) + SUM(MaterialCost) + SUM(SubcontractCost) + SUM(EquipmentCost) + SUM(OtherCost) + SUM(AdministrativeCost)) AS TotalProjectActual
     FROM   DetailAgg
     GROUP BY jobnum
 )
@@ -148,16 +202,16 @@ SELECT j.jobnum,
        jt.TotalOtherCost,
        jt.TotalAdministrativeBudget,
        jt.TotalAdministrativeCost,
-       COALESCE(w.CostToDate, 0)    AS TotalProjectCost,
-       COALESCE(w.Budget, 0)        AS TotalProjectBudget,
+       jt.TotalProjectActual        AS TotalProjectCost,
+       jt.TotalProjectBudget        AS TotalProjectBudget,
        (SELECT SUM(jc.COST)
-        FROM   dataextract.dbo.JCDETAIL jc
-               INNER JOIN dataextract.dbo.jcchangeorderstep jco
+        FROM   jcdetail jc
+               INNER JOIN jcchangeorderstep jco
                  ON jc.jobnum = jco.jobnum
                 AND jc.ponum  = jco.ordernum
         WHERE  jc.TYPE   = 19
           AND  jco.type  = 20
-          AND  jc.Company = 1
+          $contractCompanyFilter
           AND  jc.jobnum = j.jobnum) AS ContractAmount,
        da.phasenum,
        COALESCE(p.name,'Unknown') AS PhaseName,
@@ -180,9 +234,26 @@ SELECT j.jobnum,
 FROM   jcjob j
        INNER JOIN DetailAgg da ON j.jobnum = da.jobnum
        INNER JOIN JobTotals jt ON j.jobnum = jt.jobnum
-       LEFT  JOIN jcphase p ON j.jobnum = p.jobnum AND da.phasenum = p.phasenum
-       LEFT  JOIN jccat  c ON j.jobnum = c.jobnum AND da.phasenum = c.phasenum AND da.catnum = c.catnum
-       LEFT  JOIN DataExtract.dbo.v_WipTotals w ON j.jobnum = w.JobNum
+       -- Match phase names by converting phasenum to INT on both sides so zero-padded values (e.g. "001")
+       -- in jcphase still join correctly with numeric values coming from jcdetail.
+       LEFT  JOIN (
+            SELECT DISTINCT jobnum,
+                   CAST(phasenum AS INT)              AS phasenum,
+                   name
+            FROM   jcphase
+       ) p  ON  j.jobnum                = p.jobnum
+            AND CAST(da.phasenum AS INT) = p.phasenum
+
+       -- Match category names the same way (convert both phase and category numbers to INT)
+       LEFT  JOIN (
+            SELECT DISTINCT jobnum,
+                   CAST(phasenum AS INT)              AS phasenum,
+                   CAST(catnum   AS INT)              AS catnum,
+                   name
+            FROM   jccat
+       ) c  ON  j.jobnum                = c.jobnum
+            AND CAST(da.phasenum AS INT) = c.phasenum
+            AND CAST(da.catnum   AS INT) = c.catnum
 WHERE  j.closed = 0
   AND  j.status = 1
   AND  LEFT(j.class, 4) IN ($classFilter)
@@ -201,6 +272,8 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
         # Build job data structure
         $jobData = [ordered]@{}
         
+
+        
         foreach ($row in $data.Tables[0].Rows) {
             $jobNum = $row["jobnum"]
             $phaseNum = $row["phasenum"]
@@ -211,29 +284,29 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
             # Initialize job if not exists
             if (-not $jobData[$jobNum]) {
                 # Pre-compute derived values
-                $budgetHours = [double]$row["TotalBudgetHours"]
-                $actualHours = [double]$row["TotalActualHours"]
-                $laborBudget = [double]$row["TotalLaborBudget"]
-                $laborCost   = [double]$row["TotalLaborCost"]
-                $materialBudget = [double]$row["TotalMaterialBudget"]
-                $materialCost   = [double]$row["TotalMaterialCost"]
-                $subcontractBudget = [double]$row["TotalSubcontractBudget"]
-                $subcontractCost   = [double]$row["TotalSubcontractCost"]
-                $equipmentBudget = [double]$row["TotalEquipmentBudget"]
-                $equipmentCost   = [double]$row["TotalEquipmentCost"]
-                $otherBudget     = [double]$row["TotalOtherBudget"]
-                $otherCost       = [double]$row["TotalOtherCost"]
-                $administrativeBudget = [double]$row["TotalAdministrativeBudget"]
-                $administrativeCost   = [double]$row["TotalAdministrativeCost"]
+                $budgetHours = ConvertTo-SafeDouble $row["TotalBudgetHours"]
+                $actualHours = ConvertTo-SafeDouble $row["TotalActualHours"]
+                $laborBudget = ConvertTo-SafeDouble $row["TotalLaborBudget"]
+                $laborCost   = ConvertTo-SafeDouble $row["TotalLaborCost"]
+                $materialBudget = ConvertTo-SafeDouble $row["TotalMaterialBudget"]
+                $materialCost   = ConvertTo-SafeDouble $row["TotalMaterialCost"]
+                $subcontractBudget = ConvertTo-SafeDouble $row["TotalSubcontractBudget"]
+                $subcontractCost   = ConvertTo-SafeDouble $row["TotalSubcontractCost"]
+                $equipmentBudget = ConvertTo-SafeDouble $row["TotalEquipmentBudget"]
+                $equipmentCost   = ConvertTo-SafeDouble $row["TotalEquipmentCost"]
+                $otherBudget     = ConvertTo-SafeDouble $row["TotalOtherBudget"]
+                $otherCost       = ConvertTo-SafeDouble $row["TotalOtherCost"]
+                $administrativeBudget = ConvertTo-SafeDouble $row["TotalAdministrativeBudget"]
+                $administrativeCost   = ConvertTo-SafeDouble $row["TotalAdministrativeCost"]
 
                 $budgetRate  = if ($budgetHours -gt 0) { [Math]::Round($laborBudget / $budgetHours, 2) } else { 0 }
                 $actualRate  = if ($actualHours -gt 0) { [Math]::Round($laborCost / $actualHours, 2) } else { 0 }
 
-                $projBudget  = [double]$row["TotalProjectBudget"]
-                $projActual  = [double]$row["TotalProjectCost"]
+                $projBudget  = ConvertTo-SafeDouble $row["TotalProjectBudget"]
+                $projActual  = ConvertTo-SafeDouble $row["TotalProjectCost"]
                 $projectCostToUse = if ($projActual -gt $projBudget) { $projActual } else { $projBudget }
 
-                $contractAmt = if ($row["ContractAmount"] -ne $null) { [Math]::Round([double]$row["ContractAmount"], 2) } else { 0 }
+                $contractAmt = if ($row["ContractAmount"] -is [DBNull] -or $row["ContractAmount"] -eq $null) { 0 } else { [Math]::Round((ConvertTo-SafeDouble $row["ContractAmount"]), 2) }
 
                 $jobData[$jobNum] = @{
                     JobNumber = $jobNum
@@ -271,20 +344,20 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
             }
             
             # Add category and update phase totals
-            $budgetHours = [double]$row["BudgetHours"]
-            $actualHours = [double]$row["ActualHours"]
-            $laborBudget = [double]$row["LaborBudget"]
-            $laborCost = [double]$row["LaborCost"]
-            $materialBudget = [double]$row["MaterialBudget"]
-            $materialCost = [double]$row["MaterialCost"]
-            $subcontractBudget = [double]$row["SubcontractBudget"]
-            $subcontractCost = [double]$row["SubcontractCost"]
-            $equipmentBudget = [double]$row["EquipmentBudget"]
-            $equipmentCost = [double]$row["EquipmentCost"]
-            $otherBudget = [double]$row["OtherBudget"]
-            $otherCost = [double]$row["OtherCost"]
-            $administrativeBudget = [double]$row["AdministrativeBudget"]
-            $administrativeCost = [double]$row["AdministrativeCost"]
+            $budgetHours = ConvertTo-SafeDouble $row["BudgetHours"]
+            $actualHours = ConvertTo-SafeDouble $row["ActualHours"]
+            $laborBudget = ConvertTo-SafeDouble $row["LaborBudget"]
+            $laborCost = ConvertTo-SafeDouble $row["LaborCost"]
+            $materialBudget = ConvertTo-SafeDouble $row["MaterialBudget"]
+            $materialCost = ConvertTo-SafeDouble $row["MaterialCost"]
+            $subcontractBudget = ConvertTo-SafeDouble $row["SubcontractBudget"]
+            $subcontractCost = ConvertTo-SafeDouble $row["SubcontractCost"]
+            $equipmentBudget = ConvertTo-SafeDouble $row["EquipmentBudget"]
+            $equipmentCost = ConvertTo-SafeDouble $row["EquipmentCost"]
+            $otherBudget = ConvertTo-SafeDouble $row["OtherBudget"]
+            $otherCost = ConvertTo-SafeDouble $row["OtherCost"]
+            $administrativeBudget = ConvertTo-SafeDouble $row["AdministrativeBudget"]
+            $administrativeCost = ConvertTo-SafeDouble $row["AdministrativeCost"]
             
             $jobData[$jobNum].Phases[$phaseNum].Categories[$catNum] = @{
                 CategoryName = $row["CatName"]
@@ -328,6 +401,46 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
             }
         }
 
+        # Filter out phases and categories with no data
+        $totalCategoriesRemoved = 0
+        $totalPhasesRemoved = 0
+        
+        foreach ($job in $jobData.Values) {
+            $phasesToRemove = @()
+            
+            foreach ($phaseKey in $job.Phases.Keys) {
+                $phase = $job.Phases[$phaseKey]
+                
+                # Filter out categories with no data
+                $categoriesToRemove = @()
+                foreach ($categoryKey in $phase.Categories.Keys) {
+                    $category = $phase.Categories[$categoryKey]
+                    if (-not (Test-CategoryHasData $category)) {
+                        $categoriesToRemove += $categoryKey
+                    }
+                }
+                
+                # Remove empty categories
+                foreach ($categoryKey in $categoriesToRemove) {
+                    $phase.Categories.Remove($categoryKey)
+                    $totalCategoriesRemoved++
+                }
+                
+                # Check if phase has data after category filtering
+                if ($phase.Categories.Count -eq 0 -or -not (Test-PhaseHasData $phase)) {
+                    $phasesToRemove += $phaseKey
+                }
+            }
+            
+            # Remove empty phases
+            foreach ($phaseKey in $phasesToRemove) {
+                $job.Phases.Remove($phaseKey)
+                $totalPhasesRemoved++
+            }
+        }
+        
+        Write-Host "Filtered out $totalCategoriesRemoved categories and $totalPhasesRemoved phases with no data"
+
         # Filter out jobs with no meaningful data
         $originalCount = $jobData.Count
         $filteredJobData = [ordered]@{}
@@ -366,5 +479,3 @@ ORDER BY j.jobnum, da.phasenum, da.catnum
     finally { if ($conn.State -eq 'Open') { $conn.Close() } }
 }
 
-# "cutoff date "06-20-2025"
-Export-JobDataToJson
